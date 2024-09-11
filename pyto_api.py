@@ -9,7 +9,8 @@ import pathlib
 import uvicorn
 import uuid
 import togetherAPI
-
+import encription_function as enc
+from mimetypes import guess_extension
 app= fastapi.FastAPI()
 
 model = genai.GenerativeModel('gemini-1.5-flash',generation_config={"response_mime_type": "application/json"})
@@ -41,9 +42,10 @@ def AI_description(image_path):
 
 
 @app.post("/uploadfile")
-async def upload (username:  Annotated[str, Form()],file : Annotated[UploadFile, File()]):
-    save_path =os.path.join(rf'D:\PYTO\{username}\gallery\raw_image',file.filename)
-    processed_path=os.path.join(rf'D:\PYTO\{username}\gallery\processed_image',file.filename)
+async def upload (username:  Annotated[str, Form()],file : Annotated[UploadFile, File()],user_key:  Annotated[str, Form()]):
+    
+    save_path =os.path.join(rf'{username}\gallery\raw_image',file.filename)
+    processed_path=os.path.join(rf'{username}\gallery\processed_image',file.filename)
     if file.size> 15000000:
         return {"message":"size limit reached"}
     elif file.size> 1000000:
@@ -64,25 +66,33 @@ async def upload (username:  Annotated[str, Form()],file : Annotated[UploadFile,
             return {"message": "There was an error uploading the file"}
         
     user_face_encodings, user_face_list = pyto_main_func.return_face_encoding(username)
-    if user_face_list != None:
-        pyto_main_func.compare(user_face_encodings, user_face_list,save_path,username)
+    unlabelled_user_face_encodings, unlabelled_user_face_list = pyto_main_func.return_face_encoding(username,is_known=False)
+    if user_face_list != None and unlabelled_user_face_list != None:
+        pyto_main_func.compare(user_face_encodings, user_face_list,save_path,username,unlabelled_user_face_encodings,unlabelled_user_face_list,user_key)
         resp=AI_description(processed_path)
+        enc.encrypt_file(user_key,processed_path)
     else :
         resp=AI_description(save_path)
+        
     pyto_main_func.add_collection_tags(resp,username,file.filename)
-    pyto_main_func.compressed(save_path,username)
-
+    compressed_path=pyto_main_func.compressed(save_path,username)
+    enc.encrypt_file(user_key,save_path)
+    enc.encrypt_file(user_key,compressed_path)
     return {"message": f"Successfully uploaded {file.filename}"}
 
 @app.post("/create_user/{username}")
 async def create_user(username):
     pyto_main_func.init_new_user(username=username)
     pyto_main_func.create_user_colection_by_name(username)
-    return {"status":"success"}
+    key=enc.generate_key()
+    return {"status":"success", "key":key}
 
 @app.post("/uploadfile/addencoding")
-async def add_encoding(username:  Annotated[str, Form()],file : Annotated[UploadFile, File()],name:  Annotated[str, Form()]):
-    save_path =os.path.join(rf'D:\PYTO\{username}\face_encodings',file.filename)
+async def add_encoding(username:  Annotated[str, Form()],file : Annotated[UploadFile, File()],name:  Annotated[str, Form()],user_key:  Annotated[str, Form()]):
+    extension=guess_extension(file.filename)
+    dafile_name=f"{name}.{extension}"
+    save_path =os.path.join(rf'{username}\face_encodings',dafile_name)
+    
     if file.size> 15000000:
         return {"message":"size limit reached"}
     elif file.size> 1000000:
@@ -105,10 +115,11 @@ async def add_encoding(username:  Annotated[str, Form()],file : Annotated[Upload
             return {"message": "There was an error uploading the file"}
         
     pyto_main_func.add_encoding(save_path,username,name)   
+    enc.encrypt_file(user_key,save_path)
     return {"message": f"Successfully uploaded {file.filename}, encoding added"}
 
 @app.post("/queeryfile/")
-async def retrieveFiles(username:  Annotated[str, Form()],querry:  Annotated[str, Form()],n:  Annotated[int, Form()]):
+async def retrieveFiles(username:  Annotated[str, Form()],querry:  Annotated[str, Form()],n:  Annotated[int, Form()],user_key:  Annotated[str, Form()]):
     translated=togetherAPI.querry_translate(querry)
     strat =translated.find('{')
     end =translated.find('}')
@@ -122,15 +133,19 @@ async def retrieveFiles(username:  Annotated[str, Form()],querry:  Annotated[str
     url_dict={}
     print(alpha["ids"][0])
     for filename,distance,tags in zip(alpha["ids"][0],alpha["distances"][0],alpha["documents"][0]):
-        path = os.path.join(rf'D:\PYTO\{username}\gallery\compressed_image',filename)
+        path = os.path.join(rf'{username}\gallery\compressed_image',filename)
+        enc.decrypt_file(user_key,path)
         url= pyto_main_func.upload_path(path,username)
+        enc.encrypt_file(user_key,path)
         url_dict[filename]={"url":url,"distance":distance,"description":tags}
     return {"result": url_dict}
 
 @app.post("/image/raw")
-async def retrieveRawFiles(username:  Annotated[str, Form()],filename:  Annotated[str, Form()]):
-    path = os.path.join(rf'D:\PYTO\{username}\gallery\raw_image',filename)
+async def retrieveRawFiles(username:  Annotated[str, Form()],filename:  Annotated[str, Form()],user_key:  Annotated[str, Form()]):
+    path = os.path.join(rf'{username}\gallery\raw_image',filename)
+    enc.decrypt_file(user_key,path)
     url= pyto_main_func.upload_path(path,username)
+    enc.encrypt_file(user_key,path)
     return {filename:url}
 
 @app.get("/usage/{username}")
@@ -139,7 +154,19 @@ async def retrieveRawFiles(username):
     size_in_mb= size/1000000
     return {"usage": size_in_mb}
 
+@app.post("/image/recognized_faces")
+async def retrieve_all_recognized_faces(username:  Annotated[str, Form()],user_key:  Annotated[str, Form()]):
+    return pyto_main_func.return_all_face_inDIR(username,user_key,"face_encodings")
+
+@app.post("/image/unrecognized_faces")
+async def retrieve_all_unrecognized_faces(username:  Annotated[str, Form()],user_key:  Annotated[str, Form()]):
+    return pyto_main_func.return_all_face_inDIR(username,user_key,"unrecognized")
       
+@app.post("/image/unrecognized_faces/recognize")
+async def recognizes(username:  Annotated[str, Form()],name:  Annotated[str, Form()],da_unrecognized:  Annotated[str, Form()]):
+    pyto_main_func.recog_from_unrecog(username,name,da_unrecognized)
+    return {"status":"success"}
+
 if __name__ == "__main__":
     #packetriot tunnel is connected to porst 80 -- config it in ur own terminal
     uvicorn.run(app=app,host="0.0.0.0",port=80)
