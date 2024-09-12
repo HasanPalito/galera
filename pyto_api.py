@@ -7,10 +7,17 @@ import google.generativeai as genai
 import json
 import pathlib
 import uvicorn
-import uuid
 import togetherAPI
 import encription_function as enc
 from mimetypes import guess_extension
+from fastapi import Depends
+from fastapi.security import OAuth2PasswordBearer
+import requests
+from jose import jwt
+from fastapi.responses import RedirectResponse
+from fastapi.security import OAuth2PasswordBearer
+from fastapi import Depends, HTTPException, status
+import jwt
 app= fastapi.FastAPI()
 
 model = genai.GenerativeModel('gemini-1.5-flash',generation_config={"response_mime_type": "application/json"})
@@ -40,10 +47,67 @@ def AI_description(image_path):
     print(response.text)
     return response.text
 
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
+
+# Replace these with your own values from the Google Developer Console
+GOOGLE_CLIENT_ID = "495043862553-0mgs5p9uiutd5e2d6jou1j9553ricr4i.apps.googleusercontent.com"
+GOOGLE_CLIENT_SECRET = "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"
+GOOGLE_REDIRECT_URI = "http://localhost/"
+
+def validate(token):
+    try:
+        # Validate the JWT token using the same secret used to sign it
+        payload = jwt.decode(token, GOOGLE_CLIENT_SECRET, algorithms=["HS256"])
+        return payload
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token has expired")
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
+    
+@app.get("/login", response_class=RedirectResponse)
+async def redirect_fastapi():
+    return "https://accounts.google.com/o/oauth2/auth?response_type=code&client_id=495043862553-0mgs5p9uiutd5e2d6jou1j9553ricr4i.apps.googleusercontent.com&redirect_uri=http://localhost/&scope=openid%20profile%20email&access_type=offline"
+
+@app.get("/")
+async def auth_google(code: str):
+    token_url = "https://accounts.google.com/o/oauth2/token"
+    data = {
+        "code": code,
+        "client_id": GOOGLE_CLIENT_ID,
+        "client_secret": GOOGLE_CLIENT_SECRET,
+        "redirect_uri": GOOGLE_REDIRECT_URI,
+        "grant_type": "authorization_code",
+    }
+    print(code)
+    response = requests.post(token_url, data=data)
+    access_token = response.json().get("access_token")
+    user_info = requests.get("https://www.googleapis.com/oauth2/v1/userinfo", headers={"Authorization": f"Bearer {access_token}"})
+    print(user_info.json())
+    jwt_token = jwt.encode({
+        "id": user_info.json()["id"],
+        "email": user_info.json()["email"],
+        "name" : user_info.json()["name"]
+    },  GOOGLE_CLIENT_SECRET, algorithm="HS256")
+
+    return {"jwt_token": jwt_token,"user_info":user_info.json()}
+
+@app.get("/ping")
+async def get_token(token: str = Depends(oauth2_scheme)):
+    print("hello")
+    try:
+        # Validate the JWT token using the same secret used to sign it
+        payload = jwt.decode(token, GOOGLE_CLIENT_SECRET, algorithms=["HS256"])
+        return {"message": "Token is valid", "payload": payload}
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token has expired")
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
+
 
 @app.post("/uploadfile")
-async def upload (username:  Annotated[str, Form()],file : Annotated[UploadFile, File()],user_key:  Annotated[str, Form()]):
-    
+async def upload (file : Annotated[UploadFile, File()],user_key:  Annotated[str, Form()],token: str = Depends(oauth2_scheme)):
+    payload=validate(token)
+    username=payload["id"]
     save_path =os.path.join(rf'{username}\gallery\raw_image',file.filename)
     processed_path=os.path.join(rf'{username}\gallery\processed_image',file.filename)
     if file.size> 15000000:
@@ -80,15 +144,19 @@ async def upload (username:  Annotated[str, Form()],file : Annotated[UploadFile,
     enc.encrypt_file(user_key,compressed_path)
     return {"message": f"Successfully uploaded {file.filename}"}
 
-@app.post("/create_user/{username}")
-async def create_user(username):
+@app.post("/create_user/")
+async def create_user(token: str = Depends(oauth2_scheme)):
+    payload=validate(token)
+    username=payload["id"]
     pyto_main_func.init_new_user(username=username)
     pyto_main_func.create_user_colection_by_name(username)
     key=enc.generate_key()
     return {"status":"success", "key":key}
 
 @app.post("/uploadfile/addencoding")
-async def add_encoding(username:  Annotated[str, Form()],file : Annotated[UploadFile, File()],name:  Annotated[str, Form()],user_key:  Annotated[str, Form()]):
+async def add_encoding(file : Annotated[UploadFile, File()],name:  Annotated[str, Form()],user_key:  Annotated[str, Form()],token: str = Depends(oauth2_scheme)):
+    payload=validate(token)
+    username=payload["id"]
     extension=guess_extension(file.filename)
     dafile_name=f"{name}.{extension}"
     save_path =os.path.join(rf'{username}\face_encodings',dafile_name)
@@ -119,7 +187,9 @@ async def add_encoding(username:  Annotated[str, Form()],file : Annotated[Upload
     return {"message": f"Successfully uploaded {file.filename}, encoding added"}
 
 @app.post("/queeryfile/")
-async def retrieveFiles(username:  Annotated[str, Form()],querry:  Annotated[str, Form()],n:  Annotated[int, Form()],user_key:  Annotated[str, Form()]):
+async def retrieveFiles(querry:  Annotated[str, Form()],n:  Annotated[int, Form()],user_key:  Annotated[str, Form()],token: str = Depends(oauth2_scheme)):
+    payload=validate(token)
+    username=payload["id"]
     translated=togetherAPI.querry_translate(querry)
     strat =translated.find('{')
     end =translated.find('}')
@@ -141,29 +211,39 @@ async def retrieveFiles(username:  Annotated[str, Form()],querry:  Annotated[str
     return {"result": url_dict}
 
 @app.post("/image/raw")
-async def retrieveRawFiles(username:  Annotated[str, Form()],filename:  Annotated[str, Form()],user_key:  Annotated[str, Form()]):
+async def retrieveRawFiles(filename:  Annotated[str, Form()],user_key:  Annotated[str, Form()],token: str = Depends(oauth2_scheme)):
+    payload=validate(token)
+    username=payload["id"]
     path = os.path.join(rf'{username}\gallery\raw_image',filename)
     enc.decrypt_file(user_key,path)
     url= pyto_main_func.upload_path(path,username)
     enc.encrypt_file(user_key,path)
     return {filename:url}
 
-@app.get("/usage/{username}")
-async def retrieveRawFiles(username):
+@app.get("/usage")
+async def retrieveRawFiles(token: str = Depends(oauth2_scheme)):
+    payload=validate(token)
+    username=payload["id"]
     size = pyto_main_func.user_usage(username)
     size_in_mb= size/1000000
     return {"usage": size_in_mb}
 
 @app.post("/image/recognized_faces")
-async def retrieve_all_recognized_faces(username:  Annotated[str, Form()],user_key:  Annotated[str, Form()]):
+async def retrieve_all_recognized_faces(username:  Annotated[str, Form()],user_key:  Annotated[str, Form()],token: str = Depends(oauth2_scheme)):
+    payload=validate(token)
+    username=payload["id"]
     return pyto_main_func.return_all_face_inDIR(username,user_key,"face_encodings")
 
 @app.post("/image/unrecognized_faces")
-async def retrieve_all_unrecognized_faces(username:  Annotated[str, Form()],user_key:  Annotated[str, Form()]):
+async def retrieve_all_unrecognized_faces(user_key:  Annotated[str, Form()],token: str = Depends(oauth2_scheme)):
+    payload=validate(token)
+    username=payload["id"]
     return pyto_main_func.return_all_face_inDIR(username,user_key,"unrecognized")
       
 @app.post("/image/unrecognized_faces/recognize")
-async def recognizes(username:  Annotated[str, Form()],name:  Annotated[str, Form()],da_unrecognized:  Annotated[str, Form()]):
+async def recognizes(name:  Annotated[str, Form()],da_unrecognized:  Annotated[str, Form()],token: str = Depends(oauth2_scheme)):
+    payload=validate(token)
+    username=payload["id"]
     pyto_main_func.recog_from_unrecog(username,name,da_unrecognized)
     return {"status":"success"}
 
