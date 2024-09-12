@@ -156,12 +156,13 @@ def compare(known_face_encodings,face_list,image_path,username,unlabelled_known_
              img_1=image[top-30:bottom+30,left-30:right+30]
              path=rf'{username}\unrecognized\unrecognized_{length+1}.jpg'
              cv2.imwrite(path, img_1)
+             
+             add_encoding(path,username,f"unrecognized_{length+1}",False)
+             name=f"unrecognized_{length+1}"
              try:
                enc.encrypt_file(user_key,path)
              except:
                print("SUMTING IS WONG")
-             add_encoding(path,username,f"unrecognized_{length+1}",False)
-             name=f"unrecognized_{length+1}"
         else:
           cv2.rectangle(image, (left, top), (right, bottom), (0, 0, 255), 2)
           cv2.putText(image, f'name : {name}', (left, bottom+10), cv2.FONT_HERSHEY_SIMPLEX, size_factor, (36,255,12), 2)
@@ -232,11 +233,13 @@ def return_all_face_inDIR(username,user_key,DIRNAME):
     for filename in os.listdir(user_dir):
         file_path = os.path.join(user_dir, filename)
         if os.path.isfile(file_path):
-            enc.decrypt_file(file_path,user_key)
+            enc.decrypt_file(user_key,file_path)
             url=upload_path(file_path,username)
-            name, extension = os.path.splitext(file_path)
+            filename = os.path.basename(file_path)
+            name, extension = os.path.splitext(filename)
             url_dict[name]=url
-            enc.encrypt_file(file_path,user_key)
+            print(url)
+            enc.encrypt_file(user_key,file_path)
     return {"url":url_dict}
 
 def recog_from_unrecog(username,name,unrecog):

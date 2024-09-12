@@ -1,4 +1,5 @@
 from cryptography.fernet import Fernet
+import base64
 
 def encrypt_file(key,path):
     fernet = Fernet(key)
