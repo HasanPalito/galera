@@ -2,7 +2,7 @@
 import requests
 def querry_translate(queery):
     headers = {
-    'Authorization': 'Bearer ' + "73096e53767def88e6adc4674ae38a1df70c6d000764aea95ded4a88ddaeb7b9",
+    'Authorization': 'Bearer ' + "",
     'Content-Type': 'application/json',
     }
     content = 'from this string: "REPLACE" \nobject = be specific, what object is in sentence, analyze objective characteristic of the object like color,shape and etc , if there is no object return "NONE".\nperson = is there a persons name in the sentence, give me his/her name with objective characteristic if any .\nactivity =  from the sentence what are people doing if nothing found return "NONE"\nplace = from the sentence where is the place.\ntime =based on the sentence when is the time if nothing found return "NONE"\ndescription = decsribe the image as objectively as possible do not include subjectivity.\n\nONLY RESPONSE AS JSON, DO NOT ADD ANYTHING ELSE LIKE "Here is the JSON response:"\nUsing this JSON schema:\n        response = {"object": str, "person":str,place":str,"activity":str"time":str}'
